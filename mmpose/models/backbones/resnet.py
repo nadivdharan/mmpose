@@ -6,6 +6,7 @@ import torch.utils.checkpoint as cp
 from mmcv.cnn import (ConvModule, build_conv_layer, build_norm_layer,
                       constant_init, kaiming_init)
 from mmcv.utils.parrots_wrapper import _BatchNorm
+from mmpose.models.backbones.rsn import Upsample_module
 
 from ..builder import BACKBONES
 from .base_backbone import BaseBackbone
@@ -556,7 +557,7 @@ class ResNet(BaseBackbone):
             layer_name = f'layer{i + 1}'
             self.add_module(layer_name, res_layer)
             self.res_layers.append(layer_name)
-
+        self.upsample = Upsample_module()
         self._freeze_stages()
 
         self.feat_dim = res_layer[-1].out_channels
@@ -674,7 +675,10 @@ class ResNet(BaseBackbone):
                 outs.append(x)
         if len(outs) == 1:
             return outs[0]
-        return tuple(outs)
+        else:
+            outs.reverse()
+            outs, *_ = self.upsample(outs)
+            return [outs] # Only for single stage !
 
     def train(self, mode=True):
         """Convert the model into training mode."""
