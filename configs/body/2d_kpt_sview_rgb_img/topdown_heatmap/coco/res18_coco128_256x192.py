@@ -20,6 +20,7 @@ total_epochs = 210
 log_config = dict(
     interval=5, hooks=[
         dict(type='TextLoggerHook'),
+        dict(type='TensorboardLoggerHook')
     ])
 
 channel_cfg = dict(

@@ -20,6 +20,7 @@ total_epochs = 210
 log_config = dict(
     interval=50, hooks=[
         dict(type='TextLoggerHook'),
+        dict(type='TensorboardLoggerHook'),
     ])
 
 custom_hooks = [dict(type='TBWriterHook')]
