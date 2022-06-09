@@ -3,14 +3,16 @@ import os.path as osp
 import pickle
 import shutil
 import tempfile
+from pathlib import Path
 
 import mmcv
 import torch
 import torch.distributed as dist
 from mmcv.runner import get_dist_info
+from mmpose.apis.inference import vis_pose_result
 
 
-def single_gpu_test(model, data_loader):
+def single_gpu_test(model, data_loader, max_to_viz=None):
     """Test model with a single gpu.
 
     This method tests model with a single gpu and displays test progress bar.
@@ -28,9 +30,37 @@ def single_gpu_test(model, data_loader):
     results = []
     dataset = data_loader.dataset
     prog_bar = mmcv.ProgressBar(len(dataset))
+
+    visualized_imgs = 0
+
+    vis_dir = Path('visualize/coco')
+    if not vis_dir.is_dir():
+        vis_dir.mkdir()
+
     for data in data_loader:
         with torch.no_grad():
             result = model(return_loss=False, **data)
+
+        # visualization
+        for img_path in set(result['image_paths']):
+            if max_to_viz is not None:
+                if visualized_imgs >= max_to_viz:
+                    break
+                    # assert 0, 'maximum number of images visualized'
+            keypoints = [result['preds'][i] for i in range(result['preds'].shape[0])
+                         if result['image_paths'][i]==img_path]
+            boxes = [result['boxes'][i] for i in range(result['boxes'].shape[0])
+                         if result['image_paths'][i]==img_path]
+            result_dict_list = [{'keypoints': val_key, 'boxes': val_box} for (val_key, val_box) in zip(keypoints, boxes)]
+            img_name = Path(img_path).name.split('.jpg')[0]
+            _ = vis_pose_result(model,
+                                img_path,
+                                result_dict_list,
+                                out_file=vis_dir / f'{img_name}_vis.jpg',
+                                radius=8,
+                                thickness=2)
+            visualized_imgs += 1
+
         results.append(result)
 
         # use the first key as main key to calculate the batch size
@@ -69,7 +99,6 @@ def multi_gpu_test(model, data_loader, tmpdir=None, gpu_collect=False):
         with torch.no_grad():
             result = model(return_loss=False, **data)
         results.append(result)
-
         if rank == 0:
             # use the first key as main key to calculate the batch size
             batch_size = len(next(iter(data.values())))
