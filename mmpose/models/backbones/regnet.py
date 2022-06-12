@@ -8,7 +8,79 @@ from mmcv.cnn import build_conv_layer, build_norm_layer
 from ..builder import BACKBONES
 from .resnet import ResNet
 from .resnext import Bottleneck
+from .rsn import Upsample_unit
 
+
+class Upsample_module(nn.Module):
+    """Upsample module for RegNet, based on RSN.
+
+    Args:
+        unit_channels (int): Channel number in the upsample units.
+            Default:256.
+        num_units (int): Numbers of upsample units. Default: 4
+        widths (list[int]): Width in each stage. Default: [64, 128, 288, 672]
+        gen_skip (bool): Whether to generate skip for posterior downsample
+            module or not. Default:False
+        gen_cross_conv (bool): Whether to generate feature map for the next
+            hourglass-like module. Default:False
+        norm_cfg (dict): dictionary to construct and config norm layer.
+            Default: dict(type='BN')
+        out_channels (int): Number of channels of feature output by upsample
+            module. Must equal to in_channels of downsample module. Default:64
+    """
+
+    def __init__(self,
+                 unit_channels=256,
+                 num_units=4,
+                 stage_widths=list([64, 128, 288, 672]),
+                 gen_skip=False,
+                 gen_cross_conv=False,
+                 norm_cfg=dict(type='BN'),
+                 out_channels=64):
+        # Protect mutable default arguments
+        norm_cfg = copy.deepcopy(norm_cfg)
+        super().__init__()
+        assert len(stage_widths) == num_units
+        self.in_channels = copy.deepcopy(stage_widths)
+        self.in_channels.reverse()
+        self.num_units = num_units
+        self.gen_skip = gen_skip
+        self.gen_cross_conv = gen_cross_conv
+        self.norm_cfg = norm_cfg
+        for i in range(num_units):
+            module_name = f'up{i + 1}'
+            self.add_module(
+                module_name,
+                Upsample_unit(
+                    i,
+                    self.num_units,
+                    self.in_channels[i],
+                    unit_channels,
+                    self.gen_skip,
+                    self.gen_cross_conv,
+                    norm_cfg=self.norm_cfg,
+                    out_channels=64))
+
+    def forward(self, x):
+        out = list()
+        skip1 = list()
+        skip2 = list()
+        cross_conv = None
+        for i in range(self.num_units):
+            module_i = getattr(self, f'up{i + 1}')
+            if i == 0:
+                outi, skip1_i, skip2_i, _ = module_i(x[i], None)
+            elif i == self.num_units - 1:
+                outi, skip1_i, skip2_i, cross_conv = module_i(x[i], out[i - 1])
+            else:
+                outi, skip1_i, skip2_i, _ = module_i(x[i], out[i - 1])
+            out.append(outi)
+            skip1.append(skip1_i)
+            skip2.append(skip2_i)
+        skip1.reverse()
+        skip2.reverse()
+
+        return out, skip1, skip2, cross_conv
 
 @BACKBONES.register_module()
 class RegNet(ResNet):
@@ -190,6 +262,7 @@ class RegNet(ResNet):
             self.add_module(layer_name, res_layer)
             self.res_layers.append(layer_name)
 
+        self.upsample = Upsample_module(stage_widths=self.stage_widths)
         self._freeze_stages()
 
         self.feat_dim = stage_widths[-1]
@@ -314,4 +387,7 @@ class RegNet(ResNet):
 
         if len(outs) == 1:
             return outs[0]
-        return tuple(outs)
+        else:
+            outs.reverse()
+            outs, *_ = self.upsample(outs)
+            return [outs] # Only for single stage !
