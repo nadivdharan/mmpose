@@ -5,6 +5,12 @@ from abc import ABCMeta, abstractmethod
 import torch.nn as nn
 
 from .utils import load_checkpoint
+from .utils import match_layers_and_load_checkpoint
+
+
+BACKBONES_FOR_LAYER_MATCHING = ['regnet_x_800mf',
+                                'resnet18'
+                                ]
 
 
 class BaseBackbone(nn.Module, metaclass=ABCMeta):
@@ -25,7 +31,12 @@ class BaseBackbone(nn.Module, metaclass=ABCMeta):
         """
         if isinstance(pretrained, str):
             logger = logging.getLogger()
-            load_checkpoint(self, pretrained, strict=False, logger=logger)
+            backbone_name = pretrained.split('//')[-1]
+            if backbone_name not in BACKBONES_FOR_LAYER_MATCHING:
+                load_checkpoint(self, pretrained, strict=False, logger=logger)
+            else:
+                print(f"Trying to match state_dict and model layers for {backbone_name}")
+                match_layers_and_load_checkpoint(self, pretrained, logger=logger)
         elif pretrained is None:
             # use default initializer or customized initializer in subclasses
             pass
