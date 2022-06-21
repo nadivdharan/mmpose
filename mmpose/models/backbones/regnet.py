@@ -3,8 +3,13 @@ import copy
 
 import numpy as np
 import torch.nn as nn
-from mmcv.cnn import build_conv_layer, build_norm_layer
+from collections import OrderedDict
+from mmcv.cnn import (build_conv_layer, build_norm_layer,
+                      constant_init, kaiming_init)
+from mmcv.runner.checkpoint import _load_checkpoint
+from mmcv.utils.parrots_wrapper import _BatchNorm
 
+from mmpose.utils import get_root_logger
 from ..builder import BACKBONES
 from .resnet import ResNet
 from .resnext import Bottleneck
@@ -266,6 +271,86 @@ class RegNet(ResNet):
         self._freeze_stages()
 
         self.feat_dim = stage_widths[-1]
+
+    def load_checkpoint(self, filename,
+                        map_location='cpu',
+                        logger=None):  
+        checkpoint = _load_checkpoint(filename, map_location)
+        if 'state_dict' in checkpoint:
+            state_dict = checkpoint['state_dict']
+        else:
+            state_dict = checkpoint
+
+        model_dict = self.state_dict()
+        model_layers_by_ind = OrderedDict((i, k) for (i, k) in enumerate(model_dict))
+        new_state_dict = OrderedDict()
+        matched_layers, discarded_layers, missing_layers = list(), list(), list()
+        
+        # Topological order of model and checkpoint layers is almost the same for non 'upsampling' / 'fc' layers
+        for (i, k) in enumerate(state_dict.keys()):
+            model_layer = model_layers_by_ind[i]
+            k_split = k.split('.')
+            if 'fc' in k_split[0]:
+                discarded_layers.append(k)
+                continue
+            if not model_dict[model_layer].shape == state_dict[k].shape:
+                # checkpoint layers order is shifted w.r.t model layers
+                if k_split[-3] == 'c' and k_split[-4] == 'f':
+                    k_split[-3] = 'a'
+                elif k_split[-3] == 'b' and k_split[-4] == 'f':
+                    k_split[-3] = 'c'
+                elif k_split[-3] == 'a' and k_split[-4] == 'f':
+                    k_split[-3] = 'b'
+                k = '.'.join(k_split)
+            if not model_dict[model_layer].shape == state_dict[k].shape:
+                discarded_layers.append(k)
+            else:
+                matched_layers.append(k)
+            new_state_dict[model_layer] = state_dict[k]        
+
+        missing_layers = [k for k in model_dict if k not in new_state_dict]
+        model_dict.update(new_state_dict)
+        self.load_state_dict(model_dict)
+
+        if len(matched_layers) == 0:
+            msg = f'The pretrained weights "{filename}" cannot be loaded, '\
+                'please check the key names manually '\
+                '(** ignored and continue **)'
+            logger.warning(msg)
+        else:
+            print('Successfully loaded pretrained weights\n')
+            msg = f'** the following layers are discarded: {", ".join(discarded_layers)}\n'
+            if len(discarded_layers) > 0:
+                logger.warning(msg)
+            msg = f'** missing layers in source state_dict: {", ".join(missing_layers)}\n'
+            if len(missing_layers) > 0:
+                logger.warning(msg)
+
+    def init_weights(self, pretrained=None):
+        """Initialize the weights in backbone.
+
+        Args:
+            pretrained (str, optional): Path to pre-trained weights.
+                Defaults to None.
+        """
+        if isinstance(pretrained, str):
+            logger = get_root_logger(log_level='INFO')
+            logger.info(f"Matching state_dict and model layers")
+            self.load_checkpoint(pretrained, logger=logger)
+        elif pretrained is None:
+            for m in self.modules():
+                if isinstance(m, nn.Conv2d):
+                    kaiming_init(m)
+                elif isinstance(m, _BatchNorm):
+                    constant_init(m, 1)
+
+            if self.zero_init_residual:
+                for m in self.modules():
+                    if isinstance(m, Bottleneck):
+                        constant_init(m.norm3, 0)
+        else:
+            raise TypeError('pretrained must be a str or None.'
+                            f' But received {type(pretrained)}.')
 
     def _make_stem_layer(self, in_channels, base_channels):
         self.conv1 = build_conv_layer(
