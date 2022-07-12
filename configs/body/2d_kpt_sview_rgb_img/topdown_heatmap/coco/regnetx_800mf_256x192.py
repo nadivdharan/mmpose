@@ -2,33 +2,29 @@ _base_ = [
     '../../../../_base_/default_runtime.py',
     '../../../../_base_/datasets/coco.py'
 ]
-evaluation = dict(interval=1, metric='mAP', save_best='AP')
-# evaluation = dict(interval=10, metric='mAP', save_best='AP')
+evaluation = dict(interval=10, metric='mAP', save_best='AP')
 # load_from = None
 optimizer = dict(
     type='Adam',
-    lr=2e-2,
+    lr=2e-3,
+    weight_decay=1e-4
 )
 optimizer_config = dict(grad_clip=None)
 # learning policy
 lr_config = dict(
     policy='step',
     warmup='linear',
-    # warmup_iters=500,
-    warmup_iters=1,
+    warmup_iters=500,
     warmup_ratio=0.001,
-    step=[170, 190, 200])
-    # step=[50, 150, 250, 300])
-# total_epochs = 210
-total_epochs = 1
+    gamma=0.5,
+    min_lr=5e-6,
+    step=[50, 150, 250, 300])
+total_epochs = 310
 log_config = dict(
-    # interval=50, hooks=[
-    interval=1, hooks=[
+    interval=50, hooks=[
         dict(type='TextLoggerHook'),
         dict(type='TensorboardLoggerHook'),
     ])
-
-custom_hooks = [dict(type='TBWriterHook')]
 
 channel_cfg = dict(
     num_output_channels=17,
@@ -68,7 +64,7 @@ model = dict(
         ]),
     train_cfg=dict(),
     test_cfg=dict(
-        flip_test=True,
+        flip_test=False,
         post_process='megvii',
         shift_heatmap=False,
         modulate_kernel=5))
@@ -87,8 +83,7 @@ data_cfg = dict(
     vis_thr=0.2,
     use_gt_bbox=False,
     det_bbox_thr=0.0,
-    bbox_file='data/coco/person_detection_results/'
-    'COCO_val2017_detections_AP_H_56_person.json',
+    bbox_file = 'data/coco/coco_gt_as_results.json'
 )
 
 train_pipeline = [
@@ -145,7 +140,7 @@ test_pipeline = val_pipeline
 
 data_root = 'data/coco'
 data = dict(
-    samples_per_gpu=32,
+    samples_per_gpu=64,
     workers_per_gpu=4,
     train=dict(
         type='TopDownCocoDataset',
